@@ -1,0 +1,148 @@
+#!/usr/bin/env python3
+
+import sys, os, subprocess, signal
+import argparse, json
+
+CONFIG_FILES = [ os.path.join(os.path.expanduser("~"), ".smountrc"), "/etc/smountrc" ]
+AUTO_MKDIR = True
+SSHFS = "/usr/bin/sshfs"
+FUSERMOUNT = "/usr/bin/fusermount"
+
+def signal_handler(signal, frame):
+    sys.exit(1)
+
+signal.signal(signal.SIGINT, signal_handler)
+
+class Mount:
+
+	def __init__(self, name, data):
+		self.name = name
+		self.data = data
+
+	def __contains__(self, key):
+		return key in self.data
+
+	def host(self, value = None):
+		return self.__data("host", value)
+
+	def mountdir(self, value = None):
+		return self.__data("mountdir", value)
+
+	def port(self, value = None):
+		return self.__data("port", value)
+
+	def user(self, value = None):
+		return self.__data("user", value)
+
+	def dir(self, value = None):
+		return self.__data("dir", value)
+
+	def __data(self, key, value):
+		if value:
+			self.data[key] = value
+
+		return self.data[key]
+
+class Smount:
+
+	def __init__(self, config_files):
+		for conf in config_files:
+			if os.path.isfile(conf):
+				self.conf = json.load(open(conf, "r"))
+				self.automkdir = self.getconf("automkdir", AUTO_MKDIR)
+				self.sshfs = self.getconf("sshfs", SSHFS)
+				self.fusermount = self.getconf("fusermount", FUSERMOUNT)
+				self.basedir = self.getconf("basedir", required = True)
+				return
+
+		sys.exit("Configuration file is not available!")
+
+	def getconf(self, key, default = None, required = False):
+		if key not in self.conf:
+			if required:
+				sys.exit("Configuration key '%s' is required!" % key)
+
+			return default
+		else:
+			return self.conf[key]
+
+	def getmount(self, name, umountOnly = False):
+		if name not in self.conf["mounts"]:
+			sys.exit("Mount '%s' does not exist!" % name)
+
+		mount = Mount(name, self.conf["mounts"][name])
+
+		if "mountdir" not in mount:
+			mount.mountdir(name)
+
+		if umountOnly:
+			return mount
+
+		if "host" not in mount:
+			mount.host(name)
+
+		if "dir" not in mount:
+			mount.dir(".")
+
+		return mount
+
+	def getmountdir(self, mount):
+		return os.path.join(self.basedir, mount.mountdir())
+
+	def mount(self, name, username = None, remotedir = None):
+		selected = self.getmount(name)
+		mountdir = self.getmountdir(selected)
+
+		if not os.path.isdir(mountdir):
+			if self.automkdir:
+				os.mkdir(mountdir)
+			else:
+				sys.exit("Directory for mountpoint does not exist!")
+
+		if os.path.ismount(mountdir):
+			sys.exit("Mountpoint is already mounted...")
+
+		cmd = self.sshfs + " "
+
+		if "port" in selected:
+			cmd += "-p %d " % int(selected.port())
+
+		if username or "user" in selected:
+			cmd += "%s@" % (username if username else selected.user())
+
+		cmd += "%s:%s %s" % (selected.host(), selected.dir(), mountdir)
+
+		self.runcmd(cmd)
+
+	def umount(self, name, lazy = False):
+		mountdir = self.getmountdir(self.getmount(name, True))
+
+		cmd = "%s -u%s %s" % (self.fusermount, ("z" if lazy else ""), mountdir)
+		self.runcmd(cmd)
+
+	def runcmd(self, cmd):
+		print("### %s ###" % cmd)
+		p = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.PIPE)
+		print(p.stdout.read().decode("utf-8"), end="")
+		sys.exit(p.wait())
+
+if  __name__ == "__main__":
+
+	parser = argparse.ArgumentParser(prog="smount")
+	parser.add_argument("-c", "--config-file", help="use specified configuration file")
+	parser.add_argument("-u", "--unmount", help="unmount filesystem", action="store_true")
+	parser.add_argument("-z", "--lazy", help="lazy unmount", action="store_true")
+	parser.add_argument("-n", "--username", help="mount filesystem as user")
+	parser.add_argument("mountpoint", help="target mountpoint")
+	parser.add_argument("directory", nargs="?", help="specify directory")
+	args = parser.parse_args()
+
+	if args.config_file:
+		CONFIG_FILES = [args.config_file]
+
+	smount = Smount(CONFIG_FILES)
+
+	if args.unmount:
+		smount.umount(args.mountpoint)
+	else:
+		smount.mount(args.mountpoint, args.username, args.directory)

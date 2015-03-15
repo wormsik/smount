@@ -1,0 +1,17 @@
+{
+	"sshfs" : "/usr/bin/sshfs",
+	"fusermount" : "/usr/bin/fusermount",
+
+	"basedir" : "/home/user/mnt",
+	"automkdir" : true,
+
+	"mounts" : {
+		"example" : {
+			"mountdir" : "example",
+			"host" : "example.com",
+			"port" : 22,
+			"user" : "user",
+			"dir" : "/home/user"
+		}
+	}
+}
